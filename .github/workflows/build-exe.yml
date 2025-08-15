@@ -1,0 +1,87 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches:
+      - develop
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - develop
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    strategy:
+      matrix:
+        build_type: [Release, Debug]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure CMake
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+    
+    - name: Build
+      run: |
+        cmake --build build --config ${{ matrix.build_type }}
+    
+    - name: Find executable
+      id: find_exe
+      run: |
+        if (Test-Path "build/${{ matrix.build_type }}/foxclip_valorant.exe") {
+          echo "exe_path=build/${{ matrix.build_type }}/foxclip_valorant.exe" >> $env:GITHUB_OUTPUT
+        } elseif (Test-Path "build/foxclip_valorant.exe") {
+          echo "exe_path=build/foxclip_valorant.exe" >> $env:GITHUB_OUTPUT
+        } else {
+          Write-Error "Could not find foxclip_valorant.exe"
+          exit 1
+        }
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: foxclip-valorant-${{ matrix.build_type }}-windows
+        path: ${{ steps.find_exe.outputs.exe_path }}
+    
+    - name: Create Release Package
+      if: startsWith(github.ref, 'refs/tags/v')
+      run: |
+        mkdir release
+        copy "${{ steps.find_exe.outputs.exe_path }}" "release/"
+        copy "README.md" "release/"
+        copy "LICENSE" "release/"
+        Compress-Archive -Path "release/*" -DestinationPath "foxclip-valorant-${{ matrix.build_type }}-windows.zip"
+    
+    - name: Upload Release Package
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: actions/upload-artifact@v4
+      with:
+        name: foxclip-valorant-${{ matrix.build_type }}-release-package
+        path: foxclip-valorant-${{ matrix.build_type }}-windows.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-windows
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: artifacts/foxclip-valorant-*-release-package/*.zip
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
