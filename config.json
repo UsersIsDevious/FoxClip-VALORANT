@@ -1,6 +1,6 @@
 {
   "debug": true,
-  "enable_websocket": false,
+  "enable_websocket": true,
   "websocket_auto_start": false,
   "lockfile_paths": [
     "/var/lib/riot/lockfile",

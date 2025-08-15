@@ -11,7 +11,7 @@ const std::string ConfigManager::CONFIG_FILE_PATH = "config.json";
 Config ConfigManager::get_default_config() {
     Config config;
     config.debug = true;
-    config.enable_websocket = false;
+    config.enable_websocket = true;  // Enable WebSocket by default since it's now mandatory
     config.websocket_auto_start = false;
     
     // Default lockfile paths with environment variables for cross-platform support
