@@ -1,9 +1,16 @@
 #include "lockfile.h"
+#include "config.h"
 #include <iostream>
 
 int main() {
     std::cout << "FoxClip-VALORANT Lockfile Reader" << std::endl;
     std::cout << "================================" << std::endl;
+    
+    // Load and display config info
+    Config config = ConfigManager::load_config();
+    std::cout << "Configuration loaded from config.json" << std::endl;
+    std::cout << "Debug mode: " << (config.debug ? "ON" : "OFF") << std::endl;
+    std::cout << std::endl;
     
     auto lockfile_opt = read_lockfile();
     
