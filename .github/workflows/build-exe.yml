@@ -1,0 +1,160 @@
+name: Build & Release
+
+on:
+  push:
+    branches:
+      - master
+      - develop
+    tags:
+      - '*.*.*'           # 一旦拾って後段で厳密 SemVer 判定
+  pull_request:
+    branches:
+      - '**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ARTIFACT_DIR: artifacts
+  BUILD_TYPE: Release
+  EXE_NAME: foxclip_valorant.exe
+  GENERATOR: Visual Studio 17 2022
+  ARCH: x64
+
+jobs:
+  build:
+    # タグ push では走らない（タグは release ジョブに委譲）
+    if: github.event_name != 'push' || startsWith(github.ref, 'refs/heads/')
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure (CMake)
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G "${env:GENERATOR}" -A ${env:ARCH}
+
+      - name: Build (CMake)
+        shell: pwsh
+        run: |
+          cmake --build build --config ${env:BUILD_TYPE}
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "${env:ARTIFACT_DIR}" | Out-Null
+          $exePath = Join-Path -Path "build\${env:BUILD_TYPE}" -ChildPath "${env:EXE_NAME}"
+          if (-not (Test-Path $exePath)) {
+            Write-Host "::error::Executable not found: $exePath"
+            exit 1
+          }
+          Copy-Item "$exePath" "${env:ARTIFACT_DIR}\${env:EXE_NAME}" -Force
+          # 参考情報としてビルドログ/生成物の一部もアップロードしたい場合は適宜追加
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ github.run_number }}-${{ github.sha }}
+          path: |
+            ${{ env.ARTIFACT_DIR }}/**
+          if-no-files-found: error
+
+  release:
+    # タグ push のみ
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+
+    permissions:
+      contents: write
+
+    env:
+      TAG_NAME: ${{ github.ref_name }}
+      ARTIFACT_DIR: artifacts
+      BUILD_TYPE: Release
+      EXE_NAME: foxclip_valorant.exe
+      GENERATOR: Visual Studio 17 2022
+      ARCH: x64
+
+    steps:
+      - name: Checkout (full)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate strict SemVer tag (MAJOR.MINOR.PATCH)
+        id: semver
+        shell: bash
+        run: |
+          TAG="${TAG_NAME}"
+          if [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+            echo "SemVer OK: $TAG"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Tag '$TAG' is not strict semver (expected: MAJOR.MINOR.PATCH). Release will be skipped."
+          fi
+
+      - name: Configure (CMake)
+        if: steps.semver.outputs.valid == 'true'
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G "${env:GENERATOR}" -A ${env:ARCH}
+
+      - name: Build (CMake)
+        if: steps.semver.outputs.valid == 'true'
+        shell: pwsh
+        run: |
+          cmake --build build --config ${env:BUILD_TYPE}
+
+      - name: Package ZIP
+        if: steps.semver.outputs.valid == 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "${env:ARTIFACT_DIR}" | Out-Null
+          $exePath = Join-Path -Path "build\${env:BUILD_TYPE}" -ChildPath "${env:EXE_NAME}"
+          if (-not (Test-Path $exePath)) {
+            Write-Host "::error::Executable not found: $exePath"
+            exit 1
+          }
+          $pkgDir = "package"
+          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+          Copy-Item "$exePath" "$pkgDir\${env:EXE_NAME}" -Force
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" "$pkgDir\LICENSE" -Force }
+          if (Test-Path "README.md") { Copy-Item "README.md" "$pkgDir\README.md" -Force }
+
+          $zipName = "FoxClip-VALORANT-$(${env:TAG_NAME})-win-x64.zip"
+          if (Test-Path "${env:ARTIFACT_DIR}\$zipName") { Remove-Item "${env:ARTIFACT_DIR}\$zipName" -Force }
+          Compress-Archive -Path "$pkgDir\*" -DestinationPath "${env:ARTIFACT_DIR}\$zipName"
+          # 直接 exe も添付したい場合はコピー
+          Copy-Item "$pkgDir\${env:EXE_NAME}" "${env:ARTIFACT_DIR}\${env:EXE_NAME}" -Force
+
+      - name: Ensure artifacts exist
+        if: steps.semver.outputs.valid == 'true'
+        id: check_artifacts
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Recurse "${env:ARTIFACT_DIR}" -Include *.zip,*.exe,*.7z -ErrorAction SilentlyContinue
+          if (-not $files) {
+            Write-Host "::error::No release artifacts found under ${env:ARTIFACT_DIR}. Package your outputs (zip/exe/7z) there."
+            exit 1
+          } else {
+            $files | ForEach-Object { Write-Host "Will upload: $($_.FullName)" }
+          }
+
+      - name: Create GitHub Release
+        if: steps.semver.outputs.valid == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: ${{ env.TAG_NAME }}
+          draft: false
+          prerelease: false
+          files: |
+            ${{ env.ARTIFACT_DIR }}/**/*.zip
+            ${{ env.ARTIFACT_DIR }}/**/*.exe
+            ${{ env.ARTIFACT_DIR }}/**/*.7z

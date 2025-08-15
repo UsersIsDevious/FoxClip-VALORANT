@@ -45,12 +45,30 @@ The following environment variables are automatically expanded:
 
 ## Building
 
+### Manual Build
+
 ```bash
 mkdir build
 cd build
 cmake ..
 make
 ```
+
+### Automated Builds
+
+Windows executables (.exe files) are automatically built using GitHub Actions:
+
+- **Triggers**: Pushes to `develop` or `master` branches, version tags, and pull requests
+- **Build Types**: Both Debug and Release configurations
+- **Artifacts**: Download built executables from the GitHub Actions "Artifacts" section
+- **Releases**: For version tags (e.g., `v1.0.0`), packaged releases are automatically created
+
+To trigger a build:
+1. Push changes to the `develop` branch
+2. Create a version tag: `git tag v1.0.0 && git push origin v1.0.0`
+3. Use the "Run workflow" button in the GitHub Actions tab
+
+Built executables will be available as downloadable artifacts in the workflow run.
 
 ## Usage
 
