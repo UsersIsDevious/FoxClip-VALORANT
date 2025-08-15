@@ -1,0 +1,21 @@
+# Build artifacts
+build/
+*.o
+*.exe
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+
+# Lockfile (should not be committed as it contains sensitive data)
+lockfile
