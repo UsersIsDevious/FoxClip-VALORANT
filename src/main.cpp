@@ -1,18 +1,24 @@
 #include "lockfile.h"
 #include "config.h"
+#ifdef WEBSOCKET_ENABLED
 #include "websocket_client.h"
+#endif
 #include <iostream>
 #include <thread>
 #include <chrono>
 #include <csignal>
 
+#ifdef WEBSOCKET_ENABLED
 std::unique_ptr<RiotWSClient> g_ws_client;
+#endif
 
 void signal_handler(int signal) {
     std::cout << "\nShutting down..." << std::endl;
+#ifdef WEBSOCKET_ENABLED
     if (g_ws_client) {
         g_ws_client->stop();
     }
+#endif
     exit(0);
 }
 
@@ -21,17 +27,25 @@ int main() {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
     
+#ifdef WEBSOCKET_ENABLED
     std::cout << "FoxClip-VALORANT Lockfile Reader & WebSocket Client" << std::endl;
+#else
+    std::cout << "FoxClip-VALORANT Lockfile Reader" << std::endl;
+#endif
     std::cout << "====================================================" << std::endl;
     
     // Load and display config info
     Config config = ConfigManager::load_config();
     std::cout << "Configuration loaded from config.json" << std::endl;
     std::cout << "Debug mode: " << (config.debug ? "ON" : "OFF") << std::endl;
+#ifdef WEBSOCKET_ENABLED
     std::cout << "WebSocket enabled: " << (config.enable_websocket ? "ON" : "OFF") << std::endl;
     if (config.enable_websocket) {
         std::cout << "WebSocket auto-start: " << (config.websocket_auto_start ? "ON" : "OFF") << std::endl;
     }
+#else
+    std::cout << "WebSocket functionality: NOT COMPILED (dependencies missing)" << std::endl;
+#endif
     std::cout << std::endl;
     
     auto lockfile_opt = read_lockfile();
@@ -47,6 +61,7 @@ int main() {
         std::cout << "Source Path: " << lockfile.path << std::endl;
         
         // Start WebSocket client if enabled
+#ifdef WEBSOCKET_ENABLED
         if (config.enable_websocket) {
             std::cout << std::endl << "Starting WebSocket client..." << std::endl;
             g_ws_client = std::make_unique<RiotWSClient>();
@@ -80,7 +95,17 @@ int main() {
                 std::cout << "Failed to start WebSocket client." << std::endl;
                 return 1;
             }
+        } else {
+            std::cout << std::endl << "WebSocket functionality disabled in configuration." << std::endl;
         }
+#else
+        if (config.enable_websocket) {
+            std::cout << std::endl << "WebSocket functionality requested but not compiled (missing dependencies)." << std::endl;
+            std::cout << "To enable WebSocket support, install Boost, OpenSSL and recompile with -DENABLE_WEBSOCKET=ON" << std::endl;
+        } else {
+            std::cout << std::endl << "WebSocket functionality disabled in configuration." << std::endl;
+        }
+#endif
     } else {
         std::cout << std::endl << "Failed to read lockfile. Make sure VALORANT/Riot Client is running." << std::endl;
         return 1;

@@ -9,10 +9,10 @@ A C++ utility for reading VALORANT/Riot Client lockfile to access the local API.
 - **Debug mode toggle**: Enable/disable debug logging via configuration
 - **Cross-platform paths**: Supports both Windows and Linux lockfile locations
 - **Automatic config creation**: Creates default config if none exists
-- **WebSocket connectivity**: Real-time connection to Riot Client WebSocket API
-- **Event monitoring**: Subscribe to live events from Riot Client
-- **Auto-reconnection**: Handles connection drops with exponential backoff
-- **Session state tracking**: Monitors sessionLoopState from presence data
+- **Optional WebSocket connectivity**: Real-time connection to Riot Client WebSocket API (requires dependencies)
+- **Event monitoring**: Subscribe to live events from Riot Client (WebSocket mode)
+- **Auto-reconnection**: Handles connection drops with exponential backoff (WebSocket mode)
+- **Session state tracking**: Monitors sessionLoopState from presence data (WebSocket mode)
 - Parses lockfile format: `name:pid:port:password:protocol`
 - Stores data in a structured `Lockfile` class
 
@@ -44,6 +44,8 @@ The application automatically creates a `config.json` file on first run with def
 
 ### WebSocket Configuration
 
+**Note**: WebSocket functionality is optional and requires additional dependencies (Boost, OpenSSL). If these dependencies are not available during build time, the application will compile without WebSocket support and display a message when WebSocket is requested.
+
 To enable WebSocket functionality, set `enable_websocket` to `true` in your config.json:
 
 ```json
@@ -71,14 +73,29 @@ The following environment variables are automatically expanded:
 
 ## Building
 
-### Manual Build
+### Prerequisites
 
-**Dependencies:**
+**Basic build requirements:**
 - CMake 3.10+
 - C++17 compiler
+
+**Optional WebSocket dependencies:**
 - Boost.Beast (for WebSocket functionality)
-- OpenSSL (for TLS encryption)
+- OpenSSL (for TLS encryption)  
 - nlohmann::json (header-only JSON library)
+
+### Building without WebSocket support (default)
+
+```bash
+mkdir build
+cd build
+cmake ..
+make
+```
+
+This builds the basic lockfile reader without WebSocket functionality.
+
+### Building with WebSocket support
 
 **Ubuntu/Debian:**
 ```bash
@@ -90,9 +107,11 @@ sudo apt install -y build-essential cmake libboost-all-dev libssl-dev
 ```bash
 mkdir build
 cd build
-cmake ..
+cmake .. -DENABLE_WEBSOCKET=ON
 make
 ```
+
+If the dependencies are not found, the build will automatically fall back to basic functionality without WebSocket support.
 
 ### Automated Builds
 
