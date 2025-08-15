@@ -9,6 +9,10 @@ A C++ utility for reading VALORANT/Riot Client lockfile to access the local API.
 - **Debug mode toggle**: Enable/disable debug logging via configuration
 - **Cross-platform paths**: Supports both Windows and Linux lockfile locations
 - **Automatic config creation**: Creates default config if none exists
+- **WebSocket connectivity**: Real-time connection to Riot Client WebSocket API
+- **Event monitoring**: Subscribe to live events from Riot Client
+- **Auto-reconnection**: Handles connection drops with exponential backoff
+- **Session state tracking**: Monitors sessionLoopState from presence data
 - Parses lockfile format: `name:pid:port:password:protocol`
 - Stores data in a structured `Lockfile` class
 
@@ -19,6 +23,8 @@ The application automatically creates a `config.json` file on first run with def
 ```json
 {
   "debug": true,
+  "enable_websocket": false,
+  "websocket_auto_start": false,
   "lockfile_paths": [
     "%LOCALAPPDATA%\\Riot Games\\Riot Client\\Config\\lockfile",
     "%APPDATA%\\Riot Client\\Config\\lockfile",
@@ -30,6 +36,26 @@ The application automatically creates a `config.json` file on first run with def
 ```
 
 ### Configuration Options
+
+- **`debug`**: Enable detailed logging for troubleshooting
+- **`enable_websocket`**: Enable WebSocket connectivity to Riot Client
+- **`websocket_auto_start`**: Keep WebSocket connection running indefinitely
+- **`lockfile_paths`**: List of paths to search for the lockfile
+
+### WebSocket Configuration
+
+To enable WebSocket functionality, set `enable_websocket` to `true` in your config.json:
+
+```json
+{
+  "debug": true,
+  "enable_websocket": true,
+  "websocket_auto_start": false
+}
+```
+
+- When `websocket_auto_start` is `false`: Connects briefly for demonstration
+- When `websocket_auto_start` is `true`: Maintains persistent connection until Ctrl+C
 
 - **`debug`**: Set to `true` to enable detailed debug logging, `false` to disable
 - **`lockfile_paths`**: Array of file paths to search for the lockfile
@@ -47,6 +73,20 @@ The following environment variables are automatically expanded:
 
 ### Manual Build
 
+**Dependencies:**
+- CMake 3.10+
+- C++17 compiler
+- Boost.Beast (for WebSocket functionality)
+- OpenSSL (for TLS encryption)
+- nlohmann::json (header-only JSON library)
+
+**Ubuntu/Debian:**
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake libboost-all-dev libssl-dev
+```
+
+**Build Steps:**
 ```bash
 mkdir build
 cd build
@@ -72,6 +112,8 @@ Built executables will be available as downloadable artifacts in the workflow ru
 
 ## Usage
 
+### Basic Lockfile Reading
+
 ```cpp
 #include "lockfile.h"
 
@@ -81,6 +123,35 @@ if (lockfile_opt.has_value()) {
     // Use lockfile.port, lockfile.password, etc.
     std::cout << "API available on port: " << lockfile.port << std::endl;
 }
+```
+
+### WebSocket Client Usage
+
+```cpp
+#include "websocket_client.h"
+#include "lockfile.h"
+
+auto lockfile_opt = read_lockfile();
+if (lockfile_opt.has_value()) {
+    RiotWSClient ws_client;
+    if (ws_client.start(lockfile_opt.value())) {
+        // WebSocket connected and monitoring events
+        std::cout << "Session state: " << ws_client.get_session_loop_state() << std::endl;
+        
+        // Keep running or stop as needed
+        ws_client.stop();
+    }
+}
+```
+
+### Command Line Usage
+
+```bash
+# Run with WebSocket disabled (default)
+./foxclip_valorant
+
+# Enable WebSocket in config.json, then run
+./foxclip_valorant
 ```
 
 ## Default Lockfile Locations
@@ -94,6 +165,34 @@ if (lockfile_opt.has_value()) {
   - `./lockfile`
 
 The lockfile is only available when the Riot Client is running.
+
+## WebSocket Features
+
+The WebSocket client provides real-time connectivity to the Riot Client's local API:
+
+### Connection Details
+- **Endpoint**: `wss://127.0.0.1:{port}` (port from lockfile)
+- **Authentication**: Basic auth with `riot:{password}` (password from lockfile)
+- **Protocol**: WebSocket Secure (WSS) with TLS
+
+### Event Monitoring
+- Subscribes to `OnJsonApiEvent` for all API events
+- Automatically decodes base64-encoded presence data
+- Tracks `sessionLoopState` for game state monitoring
+- Real-time updates for game events, chat, etc.
+
+### Resilience Features
+- **Auto-reconnection**: Exponential backoff (0.5s to 5s) with jitter
+- **Connection monitoring**: Ping/pong with silence detection
+- **Graceful shutdown**: Clean disconnection on Ctrl+C
+- **Error handling**: Robust error recovery and logging
+
+### Session State Tracking
+The client automatically monitors and updates the session loop state by:
+1. Initial sync via REST API (`/chat/v4/presences`)
+2. Real-time updates from WebSocket events
+3. Base64 decoding of private presence data
+4. Extraction of `sessionLoopState` for game phase tracking
 
 ## Customizing Paths
 
