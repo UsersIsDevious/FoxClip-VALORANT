@@ -11,6 +11,8 @@ const std::string ConfigManager::CONFIG_FILE_PATH = "config.json";
 Config ConfigManager::get_default_config() {
     Config config;
     config.debug = true;
+    config.enable_websocket = false;
+    config.websocket_auto_start = false;
     
     // Default lockfile paths with environment variables for cross-platform support
 #ifdef _WIN32
@@ -79,6 +81,14 @@ Config ConfigManager::load_config() {
             config.debug = true;
         } else if (line.find("\"debug\":false") != std::string::npos || line.find("\"debug\": false") != std::string::npos) {
             config.debug = false;
+        } else if (line.find("\"enable_websocket\":true") != std::string::npos || line.find("\"enable_websocket\": true") != std::string::npos) {
+            config.enable_websocket = true;
+        } else if (line.find("\"enable_websocket\":false") != std::string::npos || line.find("\"enable_websocket\": false") != std::string::npos) {
+            config.enable_websocket = false;
+        } else if (line.find("\"websocket_auto_start\":true") != std::string::npos || line.find("\"websocket_auto_start\": true") != std::string::npos) {
+            config.websocket_auto_start = true;
+        } else if (line.find("\"websocket_auto_start\":false") != std::string::npos || line.find("\"websocket_auto_start\": false") != std::string::npos) {
+            config.websocket_auto_start = false;
         } else if (line.find("\"lockfile_paths\"") != std::string::npos && line.find("[") != std::string::npos) {
             in_paths_array = true;
         } else if (in_paths_array && line == "]") {
@@ -112,6 +122,8 @@ void ConfigManager::save_config(const Config& config) {
     
     ofs << "{\n";
     ofs << "  \"debug\": " << (config.debug ? "true" : "false") << ",\n";
+    ofs << "  \"enable_websocket\": " << (config.enable_websocket ? "true" : "false") << ",\n";
+    ofs << "  \"websocket_auto_start\": " << (config.websocket_auto_start ? "true" : "false") << ",\n";
     ofs << "  \"lockfile_paths\": [\n";
     
     for (size_t i = 0; i < config.lockfile_paths.size(); ++i) {
