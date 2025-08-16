@@ -110,7 +110,10 @@ bool RiotWSClient::start(const Lockfile& lockfile) {
     is_running_.store(true);
     stop_.store(false);
     
-    std::cerr << "[info] starting WebSocket client for port " << lockfile_.port << std::endl;
+    // 情報系は debug の時のみ端末に表示
+    if(config_.debug) {
+        std::cerr << "[info] starting WebSocket client for port " << lockfile_.port << std::endl;
+    }
     logutil::info("starting WebSocket client for port " + std::to_string(lockfile_.port));
     
     // Start worker thread that handles reconnection
@@ -121,13 +124,18 @@ bool RiotWSClient::start(const Lockfile& lockfile) {
                 connect_and_stream();
                 break; // Normal exit
             } catch(const std::exception& e) {
+                // ファイルには ERROR、端末は debug の時のみ（要求: 端末はエラーのみ）
                 logutil::error(std::string("WebSocket connection lost: ") + e.what());
-                std::cerr << "[warn] WebSocket connection lost: " << e.what() << std::endl;
+                if(config_.debug) {
+                    std::cerr << "[warn] WebSocket connection lost: " << e.what() << std::endl;
+                }
                 try_close();
                 if(stop_.load()) break;
                 double sleep_for = backoff_ + jitter_(rng_);
                 if(sleep_for < 0.1) sleep_for = 0.1;
-                std::cerr << "[info] reconnecting in " << sleep_for << "s" << std::endl;
+                if(config_.debug) {
+                    std::cerr << "[info] reconnecting in " << sleep_for << "s" << std::endl;
+                }
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_for));
                 backoff_ = std::min(backoff_ * 2.0, backoff_max_);
             }
@@ -177,7 +185,9 @@ void RiotWSClient::connect_and_stream() {
     auth_header_ = basic_auth_header("riot", lockfile_.password);
     rest_origin_ = host + ":" + port;
 
-    std::cerr << "[info] connecting wss://" << rest_origin_ << std::endl;
+    if(config_.debug) {
+        std::cerr << "[info] connecting wss://" << rest_origin_ << std::endl;
+    }
     logutil::info(std::string("connecting wss://") + rest_origin_);
 
     tcp::resolver resolver(ioc_);
@@ -206,10 +216,13 @@ void RiotWSClient::connect_and_stream() {
     stream.handshake(rest_origin_, "/", ec);
     if(ec) throw beast::system_error(ec);
 
-    std::cerr << "[info] WebSocket handshake completed" << std::endl;
+    if(config_.debug) {
+        std::cerr << "[info] WebSocket handshake completed" << std::endl;
+    }
     logutil::info("WebSocket handshake completed");
 
     last_rx_ = std::chrono::steady_clock::now();
+    rx_counter_.store(0);  // 受信カウンタをリセット
 
     subscribe_on_json_api_event();
     await_first_event();
@@ -240,7 +253,9 @@ void RiotWSClient::subscribe_on_json_api_event() {
     json sub = json::array({5, "OnJsonApiEvent"});
     write_text(sub.dump());
     logutil::info("subscribed: OnJsonApiEvent");
-    std::cerr << "[info] subscribed: OnJsonApiEvent" << std::endl;
+    if(config_.debug) {
+        std::cerr << "[info] subscribed: OnJsonApiEvent" << std::endl;
+    }
 }
 
 void RiotWSClient::await_first_event() {
@@ -258,7 +273,9 @@ void RiotWSClient::await_first_event() {
                     connected_once_.store(true);
                     backoff_ = backoff_min_;
                     logutil::info("connected: first event received (uri=" + ev.value("uri", std::string()) + ")");
-                    std::cerr << "[info] receiving... (Ctrl+C で終了)" << std::endl;
+                    if(config_.debug) {
+                        std::cerr << "[info] receiving... (Ctrl+C で終了)" << std::endl;
+                    }
                     return;
                 }
             } catch(...) {}
@@ -335,13 +352,16 @@ void RiotWSClient::recv_loop() {
                 continue;
             }
             last_rx_ = std::chrono::steady_clock::now();
+            rx_counter_.fetch_add(1, std::memory_order_relaxed);  // 受信を記録
 
-            // stdout には受信メッセージ「だけ」をそのまま出力
-            std::cout << msg << std::endl;
-            // ログにも保存（INFO）
+            // 受信イベントは debug=true の時のみ端末に表示
+            if(config_.debug) {
+                std::cout << msg << std::endl;
+            }
+            // ログには常に保存（INFO）
             logutil::info(std::string("message ") + msg);
 
-            // 内部処理（必要最低限の状態更新のみ）
+            // 内部処理＋presence.private の base64 デコードをログに可読出力
             try {
                 auto arr = json::parse(msg);
                 if(arr.is_array() && arr.size() >= 3 && arr[1] == "OnJsonApiEvent") {
@@ -355,13 +375,18 @@ void RiotWSClient::recv_loop() {
                                     auto raw = base64_decode(pr["private"].get<std::string>());
                                     try {
                                         auto jp = json::parse(raw);
+                                        // 見やすい形（インデント）でログファイルに追記
+                                        logutil::info(std::string("presence.private.decoded:\n") + jp.dump(2));
                                         if(jp.contains("sessionLoopState")) {
                                             loop_state_ = jp["sessionLoopState"].get<std::string>();
                                             if(config_.debug) {
                                                 logutil::info(std::string("update sessionLoopState=") + loop_state_);
                                             }
                                         }
-                                    } catch(...) {}
+                                    } catch(...) {
+                                        // JSON でない場合は生文字列を保存
+                                        logutil::info(std::string("presence.private.decoded_raw: ") + raw);
+                                    }
                                 }
                             }
                         }
@@ -371,9 +396,7 @@ void RiotWSClient::recv_loop() {
         }
     } catch(const std::exception& e) {
         logutil::error(std::string("[RECV] Exception: ") + e.what());
-        if(config_.debug) {
-            std::cerr << "[recv] exception: " << e.what() << std::endl;
-        }
+        std::cerr << "[error] recv exception: " << e.what() << std::endl;
     }
 }
 
@@ -385,15 +408,24 @@ void RiotWSClient::ping_loop() {
 
             auto dt = std::chrono::steady_clock::now() - last_rx_;
             if(std::chrono::duration_cast<std::chrono::seconds>(dt).count() > silence_timeout_sec_) {
-                throw std::runtime_error("silence timeout in ping loop");
+                // まずプローブで様子見（非ブロッキング）
+                if(probe_events(2000)) {
+                    // 何か受信できたので続行
+                    continue;
+                }
+                // プローブも不発なら再接続へ
+                logutil::info("[PING] silence persists after probe, closing to reconnect");
+                if(config_.debug) {
+                    std::cerr << "[ping] silence persists, reconnecting..." << std::endl;
+                }
+                try_close();
+                break;
             }
             write_ping();
         }
     } catch(const std::exception& e) {
         logutil::error(std::string("[PING] Exception: ") + e.what());
-        if(config_.debug) {
-            std::cerr << "[ping] exception: " << e.what() << std::endl;
-        }
+        std::cerr << "[error] ping exception: " << e.what() << std::endl;
     }
 }
 
@@ -403,14 +435,21 @@ void RiotWSClient::silence_watchdog() {
             std::this_thread::sleep_for(std::chrono::seconds(1));
             auto dt = std::chrono::steady_clock::now() - last_rx_;
             if(std::chrono::duration_cast<std::chrono::seconds>(dt).count() > silence_timeout_sec_) {
-                throw std::runtime_error("no messages (silence watchdog)");
+                // まずプローブ
+                if(probe_events(2000)) {
+                    continue;
+                }
+                logutil::info("[WATCHDOG] silence persists after probe, closing to reconnect");
+                if(config_.debug) {
+                    std::cerr << "[watchdog] silence persists, reconnecting..." << std::endl;
+                }
+                try_close();
+                break;
             }
         }
     } catch(const std::exception& e) {
         logutil::error(std::string("[WATCHDOG] ") + e.what());
-        if(config_.debug) {
-            std::cerr << "[watchdog] " << e.what() << std::endl;
-        }
+        std::cerr << "[error] watchdog exception: " << e.what() << std::endl;
         try_close();
     }
 }
@@ -432,6 +471,7 @@ bool RiotWSClient::read_text_once(std::string& out, bool block, int timeoutMs) {
 void RiotWSClient::write_text(const std::string& s) {
     if(!ws_stream_) throw std::runtime_error("ws not open");
     beast::error_code ec;
+    std::lock_guard<std::mutex> lk(write_mtx_);  // 送信は排他
     ws_stream_->text(true);
     ws_stream_->write(net::buffer(s), ec);
     if(ec) throw beast::system_error(ec);
@@ -440,14 +480,54 @@ void RiotWSClient::write_text(const std::string& s) {
 void RiotWSClient::write_ping() {
     if(!ws_stream_) throw std::runtime_error("ws not open");
     beast::error_code ec;
+    std::lock_guard<std::mutex> lk(write_mtx_);  // 送信は排他
     ws_stream_->ping(ws::ping_data{}, ec);
     if(ec) throw beast::system_error(ec);
 }
 
-void RiotWSClient::try_close() {
-    if(ws_stream_) {
-        beast::error_code ec;
-        ws_stream_->close(ws::close_code::normal, ec);
-        ws_stream_.reset();
+// 非ブロッキング・プローブ実装
+bool RiotWSClient::probe_events(int wait_ms) {
+    if(!ws_stream_) return false;
+
+    uint64_t start_rx = rx_counter_.load(std::memory_order_relaxed);
+
+    bool expected = false;
+    if(!probing_.compare_exchange_strong(expected, true)) {
+        // 他のプローブが動作中：到着だけ監視
+        int waited = 0;
+        while(waited < wait_ms) {
+            if(rx_counter_.load(std::memory_order_relaxed) > start_rx) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            waited += 50;
+        }
+        return false;
+    }
+
+    // このスレッドがプローブを担当
+    auto clear_flag = [&]{ probing_.store(false, std::memory_order_relaxed); };
+
+    try {
+        // サブスクを再送（OnJsonApiEvent）
+        json sub = json::array({5, "OnJsonApiEvent"});
+        write_text(sub.dump());
+        logutil::info("probe: re-subscribed OnJsonApiEvent");
+
+        int waited = 0;
+        while(waited < wait_ms) {
+            if(rx_counter_.load(std::memory_order_relaxed) > start_rx) {
+                logutil::info("probe: event received");
+                clear_flag();
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            waited += 50;
+        }
+        logutil::info("probe: no events within wait window");
+        clear_flag();
+        return false;
+    } catch(const std::exception& e) {
+        logutil::error(std::string("probe: exception: ") + e.what());
+        clear_flag();
+        return false;
     }
 }

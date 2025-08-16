@@ -7,6 +7,7 @@
 #include <optional>
 #include <memory>
 #include <random>
+#include <mutex>
 
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
@@ -43,6 +44,9 @@ public:
     
     // Get current session loop state
     std::string get_session_loop_state() const;
+
+    // 非ブロッキング・プローブ: サブスク再送→wait_ms 以内に何か受信すれば true
+    bool probe_events(int wait_ms = 1500);
 
 private:
     void connect_and_stream();
@@ -99,4 +103,9 @@ private:
     // Random number generation for jitter
     std::mt19937 rng_;
     std::uniform_real_distribution<double> jitter_;
+
+    // 送信排他と受信監視
+    std::mutex write_mtx_;
+    std::atomic<uint64_t> rx_counter_{0};
+    std::atomic<bool> probing_{false};
 };
