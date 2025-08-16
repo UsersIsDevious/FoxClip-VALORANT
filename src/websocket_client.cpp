@@ -531,3 +531,29 @@ bool RiotWSClient::probe_events(int wait_ms) {
         return false;
     }
 }
+
+void RiotWSClient::try_close() {
+    try {
+        if (!ws_stream_) return;
+
+        beast::error_code ec;
+        {
+            // 書き込み中と競合しないよう送信ロックを共有
+            std::lock_guard<std::mutex> lk(write_mtx_);
+            ws_stream_->close(ws::close_code::normal, ec);
+        }
+        if (ec) {
+            // close 失敗は無視して続行（再接続で回復する）
+            logutil::error(std::string("try_close: close error: ") + ec.message());
+        } else {
+            logutil::info("try_close: websocket closed");
+        }
+
+        // ストリームを破棄
+        ws_stream_.reset();
+    } catch (const std::exception& e) {
+        logutil::error(std::string("try_close: exception: ") + e.what());
+    } catch (...) {
+        logutil::error("try_close: unknown exception");
+    }
+}
