@@ -5,87 +5,134 @@
 #include <thread>
 #include <chrono>
 #include <csignal>
+#include <atomic>
+#include <optional>
+#include "logger.h"  // 追加
 
 std::unique_ptr<RiotWSClient> g_ws_client;
+std::atomic<bool> g_shutdown{false};
 
 void signal_handler(int signal) {
     std::cout << "\nShutting down..." << std::endl;
+    g_shutdown.store(true);
     if (g_ws_client) {
         g_ws_client->stop();
     }
     exit(0);
 }
 
-int main() {
+// Helper function to compare lockfile content
+bool lockfiles_equal(const std::optional<Lockfile>& a, const std::optional<Lockfile>& b) {
+    if (!a.has_value() && !b.has_value()) return true;
+    if (!a.has_value() || !b.has_value()) return false;
+    
+    const auto& lf_a = a.value();
+    const auto& lf_b = b.value();
+    
+    return lf_a.name == lf_b.name && 
+           lf_a.pid == lf_b.pid && 
+           lf_a.port == lf_b.port && 
+           lf_a.password == lf_b.password && 
+           lf_a.protocol == lf_b.protocol;
+}
+
+void display_lockfile_info(const Lockfile& lockfile) {
+    // 情報表示は stderr に出力
+    std::cerr << std::endl << "Lockfile successfully loaded!" << std::endl;
+    std::cerr << "Name: " << lockfile.name << std::endl;
+    std::cerr << "PID: " << lockfile.pid << std::endl;
+    std::cerr << "Port: " << lockfile.port << std::endl;
+    std::cerr << "Password: " << lockfile.password << std::endl;
+    std::cerr << "Protocol: " << lockfile.protocol << std::endl;
+    std::cerr << "Source Path: " << lockfile.path << std::endl;
+}
+
+int main(int argc, char** argv) {
+    // --log-dir 簡易解析（既定: ./logs）
+    std::string log_dir = "logs";
+    for(int i=1; i<argc; ++i) {
+        std::string a = argv[i];
+        if(a == "--log-dir" && i+1 < argc) {
+            log_dir = argv[++i];
+        }
+    }
+    if(!logutil::init(log_dir)) {
+        std::cerr << "[error] failed to initialize logger directory: " << log_dir << std::endl;
+    } else {
+        std::cerr << "log file: " << logutil::log_file_path() << std::endl;
+        logutil::info("logger initialized");
+    }
+
     // Setup signal handler for graceful shutdown
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
     
-    std::cout << "FoxClip-VALORANT Lockfile Reader & WebSocket Client" << std::endl;
-    std::cout << "====================================================" << std::endl;
+    // 情報メッセージは stderr
+    std::cerr << "FoxClip-VALORANT Lockfile Reader & WebSocket Client" << std::endl;
+    std::cerr << "====================================================" << std::endl;
     
     // Load and display config info
     Config config = ConfigManager::load_config();
-    std::cout << "Configuration loaded from config.json" << std::endl;
-    std::cout << "Debug mode: " << (config.debug ? "ON" : "OFF") << std::endl;
-    std::cout << "WebSocket enabled: " << (config.enable_websocket ? "ON" : "OFF") << std::endl;
-    if (config.enable_websocket) {
-        std::cout << "WebSocket auto-start: " << (config.websocket_auto_start ? "ON" : "OFF") << std::endl;
-    }
-    std::cout << std::endl;
+    std::cerr << "Configuration loaded from config.json" << std::endl;
+    std::cerr << "Debug mode: " << (config.debug ? "ON" : "OFF") << std::endl;
+    std::cerr << "WebSocket enabled: " << (config.enable_websocket ? "ON" : "OFF") << std::endl;
+    std::cerr << std::endl;
     
-    auto lockfile_opt = read_lockfile();
+    std::optional<Lockfile> current_lockfile;
+    std::optional<Lockfile> previous_lockfile;
     
-    if (lockfile_opt.has_value()) {
-        const auto& lockfile = lockfile_opt.value();
-        std::cout << std::endl << "Lockfile successfully loaded!" << std::endl;
-        std::cout << "Name: " << lockfile.name << std::endl;
-        std::cout << "PID: " << lockfile.pid << std::endl;
-        std::cout << "Port: " << lockfile.port << std::endl;
-        std::cout << "Password: " << lockfile.password << std::endl;
-        std::cout << "Protocol: " << lockfile.protocol << std::endl;
-        std::cout << "Source Path: " << lockfile.path << std::endl;
+    std::cerr << "Starting continuous monitoring. Press Ctrl+C to stop." << std::endl;
+    std::cerr << "=====================================================" << std::endl;
+    
+    while (!g_shutdown.load()) {
+        // Read lockfile
+        current_lockfile = read_lockfile();
         
-        // Start WebSocket client if enabled
-        if (config.enable_websocket) {
-            std::cout << std::endl << "Starting WebSocket client..." << std::endl;
-            g_ws_client = std::make_unique<RiotWSClient>();
-            
-            if (g_ws_client->start(lockfile)) {
-                std::cout << "WebSocket client started successfully!" << std::endl;
+        // Check if lockfile changed
+        if (!lockfiles_equal(current_lockfile, previous_lockfile)) {
+            if (current_lockfile.has_value()) {
+                display_lockfile_info(current_lockfile.value());
                 
-                if (config.websocket_auto_start) {
-                    std::cout << "WebSocket client running in background. Press Ctrl+C to stop." << std::endl;
-                    
-                    // Keep the program running
-                    while (g_ws_client->is_connected()) {
-                        std::this_thread::sleep_for(std::chrono::seconds(1));
-                    }
-                    
-                    if (config.debug) {
-                        std::cout << "WebSocket client disconnected." << std::endl;
-                    }
-                } else {
-                    std::cout << "WebSocket client started. You can now interact with it programmatically." << std::endl;
-                    std::cout << "Current session loop state: " << g_ws_client->get_session_loop_state() << std::endl;
-                    
-                    // Wait a bit to see some events, then stop
-                    std::this_thread::sleep_for(std::chrono::seconds(5));
-                    std::cout << "Updated session loop state: " << g_ws_client->get_session_loop_state() << std::endl;
-                    
-                    std::cout << "Stopping WebSocket client..." << std::endl;
+                // If we have a WebSocket client running but lockfile changed, stop it
+                if (g_ws_client && g_ws_client->is_connected()) {
+                    std::cout << "Lockfile changed, restarting WebSocket connection..." << std::endl;
                     g_ws_client->stop();
+                    g_ws_client.reset();
+                }
+                
+                // Start WebSocket client
+                if (config.enable_websocket) {
+                    std::cerr << std::endl << "Starting WebSocket client..." << std::endl;
+                    logutil::info("Starting WebSocket client");
+                    g_ws_client = std::make_unique<RiotWSClient>();
+                    
+                    if (g_ws_client->start(current_lockfile.value())) {
+                        std::cerr << "WebSocket client started successfully!" << std::endl;
+                        std::cerr << "Current session loop state: " << g_ws_client->get_session_loop_state() << std::endl;
+                    } else {
+                        std::cerr << "Failed to start WebSocket client." << std::endl;
+                        g_ws_client.reset();
+                    }
                 }
             } else {
-                std::cout << "Failed to start WebSocket client." << std::endl;
-                return 1;
+                if (previous_lockfile.has_value()) {
+                    std::cout << std::endl << "Lockfile no longer available. VALORANT/Riot Client may have stopped." << std::endl;
+                    if (g_ws_client) {
+                        g_ws_client->stop();
+                        g_ws_client.reset();
+                    }
+                }
             }
-        } else {
-            std::cout << std::endl << "WebSocket functionality disabled in configuration." << std::endl;
+            previous_lockfile = current_lockfile;
         }
-    } else {
-        std::cout << std::endl << "Failed to read lockfile. Make sure VALORANT/Riot Client is running." << std::endl;
-        return 1;
+        
+        // If not connected, wait 1 second before trying again
+        if (!g_ws_client || !g_ws_client->is_connected()) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        } else {
+            // If connected, just wait and let WebSocket handle events
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
     
     return 0;

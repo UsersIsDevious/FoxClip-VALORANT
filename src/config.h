@@ -7,7 +7,6 @@ struct Config {
     bool debug = true;
     std::vector<std::string> lockfile_paths;
     bool enable_websocket = false;
-    bool websocket_auto_start = false;
 };
 
 class ConfigManager {
