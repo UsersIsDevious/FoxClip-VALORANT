@@ -5,6 +5,9 @@
 #include <cstdlib>
 #include <algorithm>
 #include <regex>
+#include <nlohmann/json.hpp>
+
+using nlohmann::json;
 
 const std::string ConfigManager::CONFIG_FILE_PATH = "config.json";
 
@@ -55,57 +58,44 @@ std::string ConfigManager::expand_environment_variables(const std::string& path)
 Config ConfigManager::load_config() {
     std::ifstream ifs(CONFIG_FILE_PATH);
     if (!ifs.good()) {
-        // Config file doesn't exist, create default one
-        Config default_config = get_default_config();
-        save_config(default_config);
-        return default_config;
+        // ファイルが無ければデフォルトを生成
+        Config def = get_default_config();
+        save_config(def);
+        return def;
     }
-    
-    // Simple JSON parsing for our specific config structure
-    Config config;
-    std::string line;
-    bool in_paths_array = false;
-    
-    while (std::getline(ifs, line)) {
-        // Trim leading/trailing whitespace but preserve spaces in quoted strings
-        size_t start = line.find_first_not_of(" \t\r\n");
-        size_t end = line.find_last_not_of(" \t\r\n");
-        if (start != std::string::npos && end != std::string::npos) {
-            line = line.substr(start, end - start + 1);
-        } else if (start == std::string::npos) {
-            line = "";
-        }
-        
-        if (line.find("\"debug\":true") != std::string::npos || line.find("\"debug\": true") != std::string::npos) {
-            config.debug = true;
-        } else if (line.find("\"debug\":false") != std::string::npos || line.find("\"debug\": false") != std::string::npos) {
-            config.debug = false;
-        } else if (line.find("\"enable_websocket\":true") != std::string::npos || line.find("\"enable_websocket\": true") != std::string::npos) {
-            config.enable_websocket = true;
-        } else if (line.find("\"enable_websocket\":false") != std::string::npos || line.find("\"enable_websocket\": false") != std::string::npos) {
-            config.enable_websocket = false;
-        } else if (line.find("\"lockfile_paths\"") != std::string::npos && line.find("[") != std::string::npos) {
-            in_paths_array = true;
-        } else if (in_paths_array && line == "]") {
-            in_paths_array = false;
-        } else if (in_paths_array && line.find("\"") != std::string::npos) {
-            // Extract path from quoted string, preserving spaces
-            size_t start = line.find("\"");
-            size_t end = line.rfind("\"");
-            if (start != std::string::npos && end != std::string::npos && start < end) {
-                std::string path = line.substr(start + 1, end - start - 1);
-                config.lockfile_paths.push_back(path);
+
+    std::stringstream buf;
+    buf << ifs.rdbuf();
+
+    json j = json::parse(buf.str(), nullptr, /*allow_exceptions=*/false);
+    if (j.is_discarded() || !j.is_object()) {
+        std::cerr << "Failed to parse config.json; falling back to defaults." << std::endl;
+        return get_default_config();
+    }
+
+    const Config def = get_default_config();
+    Config cfg{};
+    cfg.debug = j.value("debug", def.debug);
+    cfg.enable_websocket = j.value("enable_websocket", def.enable_websocket);
+
+    // lockfile_paths
+    cfg.lockfile_paths.clear();
+    if (j.contains("lockfile_paths") && j["lockfile_paths"].is_array()) {
+        for (const auto& v : j["lockfile_paths"]) {
+            if (v.is_string()) {
+                std::string p = v.get<std::string>();
+                cfg.lockfile_paths.push_back(expand_environment_variables(p));
             }
         }
     }
-    
-    // If no paths were loaded, use defaults
-    if (config.lockfile_paths.empty()) {
-        config = get_default_config();
-        config.debug = config.debug; // Keep the debug setting that was read
+    if (cfg.lockfile_paths.empty()) {
+        // キー欠落や空配列ならデフォルトを適用
+        cfg.lockfile_paths = def.lockfile_paths;
+        for (auto& p : cfg.lockfile_paths) {
+            p = expand_environment_variables(p);
+        }
     }
-    
-    return config;
+    return cfg;
 }
 
 void ConfigManager::save_config(const Config& config) {
@@ -114,22 +104,9 @@ void ConfigManager::save_config(const Config& config) {
         std::cerr << "Failed to create config file: " << CONFIG_FILE_PATH << std::endl;
         return;
     }
-    
-    ofs << "{\n";
-    ofs << "  \"debug\": " << (config.debug ? "true" : "false") << ",\n";
-    ofs << "  \"enable_websocket\": " << (config.enable_websocket ? "true" : "false") << ",\n";
-    ofs << "  \"lockfile_paths\": [\n";
-    
-    for (size_t i = 0; i < config.lockfile_paths.size(); ++i) {
-        ofs << "    \"" << config.lockfile_paths[i] << "\"";
-        if (i < config.lockfile_paths.size() - 1) {
-            ofs << ",";
-        }
-        ofs << "\n";
-    }
-    
-    ofs << "  ]\n";
-    ofs << "}\n";
-    
-    ofs.close();
+    json j;
+    j["debug"] = config.debug;
+    j["enable_websocket"] = config.enable_websocket;
+    j["lockfile_paths"] = config.lockfile_paths;
+    ofs << j.dump(2) << std::endl; // 2スペースで整形出力
 }
