@@ -274,7 +274,7 @@ void RiotWSClient::await_first_event() {
                     backoff_ = backoff_min_;
                     logutil::info("connected: first event received (uri=" + ev.value("uri", std::string()) + ")");
                     if(config_.debug) {
-                        std::cerr << "[info] receiving... (Ctrl+C で終了)" << std::endl;
+                        std::cerr << "[info] receiving... (Press \"Ctrl+C\" to exit)" << std::endl;
                     }
                     return;
                 }
@@ -353,11 +353,7 @@ void RiotWSClient::recv_loop() {
             }
             last_rx_ = std::chrono::steady_clock::now();
             rx_counter_.fetch_add(1, std::memory_order_relaxed);  // 受信を記録
-
-            // 受信イベントは debug=true の時のみ端末に表示
-            if(config_.debug) {
-                std::cout << msg << std::endl;
-            }
+            
             // ログには常に保存（INFO）
             logutil::info(std::string("message ") + msg);
 
@@ -367,6 +363,7 @@ void RiotWSClient::recv_loop() {
                 if(arr.is_array() && arr.size() >= 3 && arr[1] == "OnJsonApiEvent") {
                     auto ev = arr[2];
                     std::string uri = ev.value("uri", "");
+                    std::cout << uri << std::endl;
                     if(uri == "/chat/v4/presences") {
                         auto& data = ev["data"];
                         if(data.contains("presences")) {

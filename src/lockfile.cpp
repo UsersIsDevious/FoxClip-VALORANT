@@ -78,7 +78,7 @@ std::optional<Lockfile> read_lockfile() {
                 std::cout << "[DEBUG]   Name: " << lf.name << std::endl;
                 std::cout << "[DEBUG]   PID: " << lf.pid << std::endl;
                 std::cout << "[DEBUG]   Port: " << lf.port << std::endl;
-                std::cout << "[DEBUG]   Password: [REDACTED]" << std::endl;
+                std::cout << "[DEBUG]   Password: " << lf.password << std::endl;
                 std::cout << "[DEBUG]   Protocol: " << lf.protocol << std::endl;
                 std::cout << "[DEBUG]   Path: " << lf.path << std::endl;
             }

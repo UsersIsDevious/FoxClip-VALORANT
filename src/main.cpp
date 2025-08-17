@@ -36,17 +36,6 @@ bool lockfiles_equal(const std::optional<Lockfile>& a, const std::optional<Lockf
            lf_a.protocol == lf_b.protocol;
 }
 
-void display_lockfile_info(const Lockfile& lockfile) {
-    // 情報表示は stderr に出力
-    std::cerr << std::endl << "Lockfile successfully loaded!" << std::endl;
-    std::cerr << "Name: " << lockfile.name << std::endl;
-    std::cerr << "PID: " << lockfile.pid << std::endl;
-    std::cerr << "Port: " << lockfile.port << std::endl;
-    std::cerr << "Password: " << lockfile.password << std::endl;
-    std::cerr << "Protocol: " << lockfile.protocol << std::endl;
-    std::cerr << "Source Path: " << lockfile.path << std::endl;
-}
-
 int main(int argc, char** argv) {
     // --log-dir 簡易解析（既定: ./logs）
     std::string log_dir = "logs";
@@ -89,9 +78,7 @@ int main(int argc, char** argv) {
         // Check if lockfile changed
         if (!lockfiles_equal(current_lockfile, previous_lockfile)) {
             if (current_lockfile.has_value()) {
-                if(config.debug) {
-                    display_lockfile_info(current_lockfile.value());
-                }
+                std::cerr << std::endl << "Lockfile successfully loaded!" << std::endl;
                 
                 // If we have a WebSocket client running but lockfile changed, stop it
                 if (g_ws_client && g_ws_client->is_connected()) {
