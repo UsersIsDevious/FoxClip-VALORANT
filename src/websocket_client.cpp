@@ -222,12 +222,12 @@ void RiotWSClient::connect_and_stream() {
     logutil::info("WebSocket handshake completed");
 
     last_rx_ = std::chrono::steady_clock::now();
-    rx_counter_.store(0);  // 受信カウンタをリセット
+    rx_counter_.store(0);  // reset receive counter
 
     subscribe_on_json_api_event();
     await_first_event();
 
-    // Resync state via REST（失敗は warn ログ）
+    // Resync state via REST (log WARN/ERROR on failure)
     try {
         resync_state_via_rest();
     } catch(const std::exception& e) {
@@ -278,7 +278,11 @@ void RiotWSClient::await_first_event() {
                     }
                     return;
                 }
-            } catch(...) {}
+            } catch(const std::exception& e) {
+                logutil::error(std::string("[AWAIT_FIRST_EVENT] JSON parse/process error: ") + e.what());
+            } catch(...) {
+                logutil::error("[AWAIT_FIRST_EVENT] Unknown exception while parsing first event");
+            }
         }
     }
 }
@@ -352,12 +356,12 @@ void RiotWSClient::recv_loop() {
                 continue;
             }
             last_rx_ = std::chrono::steady_clock::now();
-            rx_counter_.fetch_add(1, std::memory_order_relaxed);  // 受信を記録
-            
-            // ログには常に保存（INFO）
+            rx_counter_.fetch_add(1, std::memory_order_relaxed);  // record receive
+
+            // Always persist to log (INFO)
             logutil::info(std::string("message ") + msg);
 
-            // 内部処理＋presence.private の base64 デコードをログに可読出力
+            // Internal handling + decode presence.private (base64) and pretty-print to logs
             try {
                 auto arr = json::parse(msg);
                 if(arr.is_array() && arr.size() >= 3 && arr[1] == "OnJsonApiEvent") {
@@ -372,7 +376,7 @@ void RiotWSClient::recv_loop() {
                                     auto raw = base64_decode(pr["private"].get<std::string>());
                                     try {
                                         auto jp = json::parse(raw);
-                                        // 見やすい形（インデント）でログファイルに追記
+                                        // Append in readable form (indented) to the log file
                                         logutil::info(std::string("presence.private.decoded:\n") + jp.dump(2));
                                         if(jp.contains("sessionLoopState")) {
                                             loop_state_ = jp["sessionLoopState"].get<std::string>();
@@ -381,7 +385,7 @@ void RiotWSClient::recv_loop() {
                                             }
                                         }
                                     } catch(...) {
-                                        // JSON でない場合は生文字列を保存
+                                        // If not JSON, store raw string
                                         logutil::info(std::string("presence.private.decoded_raw: ") + raw);
                                     }
                                 }
@@ -389,7 +393,14 @@ void RiotWSClient::recv_loop() {
                         }
                     }
                 }
-            } catch(...) {}
+            } catch(const std::exception& e) {
+                // Log parsing/processing errors to aid troubleshooting (avoid silent failures)
+                std::string snippet = msg.substr(0, 512);
+                logutil::error(std::string("[RECV] JSON parse/process error: ") + e.what() + " | msg[0..512]: " + snippet);
+            } catch(...) {
+                std::string snippet = msg.substr(0, 512);
+                logutil::error(std::string("[RECV] Unknown exception while processing message | msg[0..512]: ") + snippet);
+            }
         }
     } catch(const std::exception& e) {
         logutil::error(std::string("[RECV] Exception: ") + e.what());
@@ -432,7 +443,7 @@ void RiotWSClient::silence_watchdog() {
             std::this_thread::sleep_for(std::chrono::seconds(1));
             auto dt = std::chrono::steady_clock::now() - last_rx_;
             if(std::chrono::duration_cast<std::chrono::seconds>(dt).count() > silence_timeout_sec_) {
-                // まずプローブ
+                // First, probe before reconnecting
                 if(probe_events(2000)) {
                     continue;
                 }

@@ -58,7 +58,7 @@ std::string ConfigManager::expand_environment_variables(const std::string& path)
 Config ConfigManager::load_config() {
     std::ifstream ifs(CONFIG_FILE_PATH);
     if (!ifs.good()) {
-        // ファイルが無ければデフォルトを生成
+        // If the file doesn't exist, create a default one
         Config def = get_default_config();
         save_config(def);
         return def;
@@ -67,6 +67,7 @@ Config ConfigManager::load_config() {
     std::stringstream buf;
     buf << ifs.rdbuf();
 
+    // Robust JSON parse without throwing exceptions
     json j = json::parse(buf.str(), nullptr, /*allow_exceptions=*/false);
     if (j.is_discarded() || !j.is_object()) {
         std::cerr << "Failed to parse config.json; falling back to defaults." << std::endl;
@@ -89,7 +90,7 @@ Config ConfigManager::load_config() {
         }
     }
     if (cfg.lockfile_paths.empty()) {
-        // キー欠落や空配列ならデフォルトを適用
+        // Apply defaults if missing or empty
         cfg.lockfile_paths = def.lockfile_paths;
         for (auto& p : cfg.lockfile_paths) {
             p = expand_environment_variables(p);
@@ -108,5 +109,5 @@ void ConfigManager::save_config(const Config& config) {
     j["debug"] = config.debug;
     j["enable_websocket"] = config.enable_websocket;
     j["lockfile_paths"] = config.lockfile_paths;
-    ofs << j.dump(2) << std::endl; // 2スペースで整形出力
+    ofs << j.dump(2) << std::endl; // pretty print with 2 spaces
 }

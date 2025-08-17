@@ -56,20 +56,20 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
     
-    // 設定読込（以降の情報出力は debug のみ）
+    // 設定読込（以降の情報出力は debug の時のみ端末に表示）
     Config config = ConfigManager::load_config();
 
-    std::cerr << "FoxClip-VALORANT Lockfile Reader & WebSocket Client" << std::endl;
-    std::cerr << "====================================================" << std::endl;
-    std::cerr << "Configuration loaded from config.json" << std::endl;
-    std::cerr << "Debug mode: " << (config.debug ? "ON" : "OFF") << std::endl;
-    std::cerr << "WebSocket enabled: " << (config.enable_websocket ? "ON" : "OFF") << std::endl;
-    std::cerr << std::endl;
-    std::cerr << "Starting continuous monitoring. Press Ctrl+C to stop." << std::endl;
-    std::cerr << "=====================================================" << std::endl;
+     std::cerr << "FoxClip-VALORANT Lockfile Reader & WebSocket Client" << std::endl;
+     std::cerr << "====================================================" << std::endl;
+     std::cerr << "Configuration loaded from config.json" << std::endl;
+     std::cerr << "Debug mode: " << (config.debug ? "ON" : "OFF") << std::endl;
+     std::cerr << "WebSocket enabled: " << (config.enable_websocket ? "ON" : "OFF") << std::endl;
+     std::cerr << std::endl;
+     std::cerr << "Starting continuous monitoring. Press Ctrl+C to stop." << std::endl;
+     std::cerr << "=====================================================" << std::endl;
 
-    std::optional<Lockfile> current_lockfile;
-    std::optional<Lockfile> previous_lockfile;
+     std::optional<Lockfile> current_lockfile;
+     std::optional<Lockfile> previous_lockfile;
     
     while (!g_shutdown.load()) {
         // Read lockfile
