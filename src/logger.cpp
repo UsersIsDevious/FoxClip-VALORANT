@@ -56,6 +56,11 @@ void logutil::info(const std::string& msg) {
     if(ofs.good()) ofs << ts() << " INFO " << msg << std::endl;
 }
 
+void logutil::warn(const std::string& msg) {
+    std::lock_guard<std::mutex> lock(mtx);
+    if(ofs.good()) ofs << ts() << " WARN " << msg << std::endl;
+}
+
 void logutil::error(const std::string& msg) {
     std::lock_guard<std::mutex> lock(mtx);
     if(ofs.good()) ofs << ts() << " ERROR " << msg << std::endl;

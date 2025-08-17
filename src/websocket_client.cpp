@@ -543,8 +543,17 @@ void RiotWSClient::try_close() {
             ws_stream_->close(ws::close_code::normal, ec);
         }
         if (ec) {
-            // close 失敗は無視して続行（再接続で回復する）
-            logutil::error(std::string("try_close: close error: ") + ec.message());
+            // 一部の TLS 終了では close_notify が無く "stream truncated" が発生する
+            // これは正常系として扱い、警告レベルで記録する
+            if (ec == ssl::error::stream_truncated) {
+                logutil::warn(std::string("try_close: stream truncated (peer closed without close_notify); treated as normal"));
+            } else if (ec == ws::error::closed) {
+                // 既に閉じている場合は情報として扱う
+                logutil::info(std::string("try_close: websocket already closed: ") + ec.message());
+            } else {
+                // それ以外はエラーとして記録（処理は継続）
+                logutil::error(std::string("try_close: close error: ") + ec.message());
+            }
         } else {
             logutil::info("try_close: websocket closed");
         }
