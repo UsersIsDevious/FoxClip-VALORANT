@@ -5,6 +5,7 @@
 #include <sstream>
 #include <algorithm>
 #include "logger.h"  // 追加
+#include <cctype>
 
 std::string RiotWSClient::now_iso() {
     using clock = std::chrono::system_clock;
@@ -260,31 +261,37 @@ void RiotWSClient::subscribe_on_json_api_event() {
 
 void RiotWSClient::await_first_event() {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(first_event_timeout_sec_);
-    for(;;) {
+    auto is_blank = [](const std::string& s) {
+        return std::all_of(s.begin(), s.end(), [](unsigned char ch){ return std::isspace(ch); });
+    };
+     for(;;) {
         if(std::chrono::steady_clock::now() > deadline) {
-            throw std::runtime_error("no event within first_event_timeout");
+            // Do not fail hard if RiotClient sends no events yet; proceed and let watchdog handle it.
+            logutil::warn("await_first_event: no event within timeout; proceeding without first event");
+            return;
         }
         std::string msg;
-        if(read_text_once(msg, true, 200)) {
-            try {
-                auto arr = json::parse(msg);
-                if(arr.is_array() && arr.size() >= 3 && arr[1] == "OnJsonApiEvent") {
-                    auto ev = arr[2];
-                    connected_once_.store(true);
-                    backoff_ = backoff_min_;
-                    logutil::info("connected: first event received (uri=" + ev.value("uri", std::string()) + ")");
-                    if(config_.debug) {
-                        std::cerr << "[info] receiving... (Press \"Ctrl+C\" to exit)" << std::endl;
-                    }
-                    return;
-                }
-            } catch(const std::exception& e) {
-                logutil::error(std::string("[AWAIT_FIRST_EVENT] JSON parse/process error: ") + e.what());
-            } catch(...) {
-                logutil::error("[AWAIT_FIRST_EVENT] Unknown exception while parsing first event");
-            }
+        if(!read_text_once(msg, true, 200)) {
+            continue;
         }
-    }
+        if(msg.empty() || is_blank(msg)) {
+            // Ignore keep-alive/empty frames
+            continue;
+        }
+        // Any non-blank frame is good enough to proceed; still try to parse but don't fail if it doesn't match.
+        try {
+            auto arr = json::parse(msg);
+            (void)arr; // parsing only to sanity-check; details handled by recv_loop()
+            return;
+        } catch(const std::exception& e) {
+            // Only warn and keep waiting
+            logutil::warn(std::string("[AWAIT_FIRST_EVENT] JSON parse warning: ") + e.what());
+            continue;
+        } catch(...) {
+            logutil::warn("[AWAIT_FIRST_EVENT] Unknown exception while parsing first event");
+            continue;
+        }
+     }
 }
 
 void RiotWSClient::resync_state_via_rest() {
@@ -344,7 +351,13 @@ json RiotWSClient::rest_get_json(const std::string& path) {
     beast::error_code ignore_ec;
     ssl_stream.shutdown(ignore_ec);
 
-    return json::parse(res.body());
+    // Parse safely; return {} on empty or invalid JSON
+    json j = json::parse(res.body(), nullptr, /*allow_exceptions=*/false);
+    if(j.is_discarded()) {
+        logutil::warn(std::string("REST parse warning (empty or invalid JSON) for path: ") + path);
+        return json::object();
+    }
+    return j;
 }
 
 void RiotWSClient::recv_loop() {
@@ -353,6 +366,11 @@ void RiotWSClient::recv_loop() {
             if(stop_.load()) break;
             std::string msg;
             if(!read_text_once(msg, true, 0)) {
+                continue;
+            }
+            // Skip empty/whitespace-only frames
+            bool blank = std::all_of(msg.begin(), msg.end(), [](unsigned char ch){ return std::isspace(ch); });
+            if(msg.empty() || blank) {
                 continue;
             }
             last_rx_ = std::chrono::steady_clock::now();

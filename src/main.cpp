@@ -91,10 +91,6 @@ int main(int argc, char** argv) {
                 
                 // Start WebSocket client
                 if (config.enable_websocket) {
-                    if(config.debug) {
-                        std::cerr << std::endl << "Starting WebSocket client..." << std::endl;
-                    }
-                    logutil::info("Starting WebSocket client");
                     g_ws_client = std::make_unique<RiotWSClient>();
                     
                     if (g_ws_client->start(current_lockfile.value())) {
