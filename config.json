@@ -1,0 +1,8 @@
+{
+  "debug": true,
+  "enable_websocket": true,
+  "lockfile_paths": [
+    "/var/lib/riot/lockfile",
+    "./lockfile"
+  ]
+}

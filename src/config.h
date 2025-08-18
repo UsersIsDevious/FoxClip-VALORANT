@@ -6,6 +6,7 @@
 struct Config {
     bool debug = true;
     std::vector<std::string> lockfile_paths;
+    bool enable_websocket = false;
 };
 
 class ConfigManager {

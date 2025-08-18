@@ -6,7 +6,7 @@ on:
       - master
       - develop
     tags:
-      - '*.*.*'           # 一旦拾って後段で厳密 SemVer 判定
+      - '*.*.*'
   pull_request:
     branches:
       - '**'
@@ -14,138 +14,166 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  ARTIFACT_DIR: artifacts
-  BUILD_TYPE: Release
-  EXE_NAME: foxclip_valorant.exe
-  GENERATOR: Visual Studio 17 2022
-  ARCH: x64
-
 jobs:
-  build:
-    # タグ push では走らない（タグは release ジョブに委譲）
-    if: github.event_name != 'push' || startsWith(github.ref, 'refs/heads/')
+  build-windows:
     runs-on: windows-latest
+    env:
+      GENERATOR: "Visual Studio 17 2022"
+      ARCH: x64
+      BUILD_TYPE: Release
+      ARTIFACT_DIR: artifacts
+      TAG_NAME: ${{ github.ref_name }}
+
+      # vcpkg 設定（Manifest + 高速化）
+      # ▼ 既定トリプレットを "静的" に固定（単体EXE化）
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static
+      VCPKG_BUILD_TYPE: release
+      VCPKG_FEATURE_FLAGS: manifests,binarycaching
+      VCPKG_BINARY_SOURCES: clear;x-gha,readwrite
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure (CMake)
-        shell: pwsh
-        run: |
-          cmake -S . -B build -G "${env:GENERATOR}" -A ${env:ARCH}
-
-      - name: Build (CMake)
-        shell: pwsh
-        run: |
-          cmake --build build --config ${env:BUILD_TYPE}
-
-      - name: Collect artifacts
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "${env:ARTIFACT_DIR}" | Out-Null
-          $exePath = Join-Path -Path "build\${env:BUILD_TYPE}" -ChildPath "${env:EXE_NAME}"
-          if (-not (Test-Path $exePath)) {
-            Write-Host "::error::Executable not found: $exePath"
-            exit 1
-          }
-          Copy-Item "$exePath" "${env:ARTIFACT_DIR}\${env:EXE_NAME}" -Force
-          # 参考情報としてビルドログ/生成物の一部もアップロードしたい場合は適宜追加
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-${{ github.run_number }}-${{ github.sha }}
-          path: |
-            ${{ env.ARTIFACT_DIR }}/**
-          if-no-files-found: error
-
-  release:
-    # タグ push のみ
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    runs-on: windows-latest
-
-    permissions:
-      contents: write
-
-    env:
-      TAG_NAME: ${{ github.ref_name }}
-      ARTIFACT_DIR: artifacts
-      BUILD_TYPE: Release
-      EXE_NAME: foxclip_valorant.exe
-      GENERATOR: Visual Studio 17 2022
-      ARCH: x64
-
-    steps:
-      - name: Checkout (full)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Validate strict SemVer tag (MAJOR.MINOR.PATCH)
+      - name: Check SemVer tag
         id: semver
-        shell: bash
-        run: |
-          TAG="${TAG_NAME}"
-          if [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "valid=true" >> "$GITHUB_OUTPUT"
-            echo "SemVer OK: $TAG"
-          else
-            echo "valid=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Tag '$TAG' is not strict semver (expected: MAJOR.MINOR.PATCH). Release will be skipped."
-          fi
-
-      - name: Configure (CMake)
-        if: steps.semver.outputs.valid == 'true'
         shell: pwsh
         run: |
-          cmake -S . -B build -G "${env:GENERATOR}" -A ${env:ARCH}
+          $ref = "${{ github.ref }}"
+          if ($ref -match '^refs/tags/\d+\.\d+\.\d+$') {
+            echo "valid=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "valid=false" >> $env:GITHUB_OUTPUT
+          }
 
-      - name: Build (CMake)
-        if: steps.semver.outputs.valid == 'true'
+      # vcpkg の baseline を自動注入（run-vcpkg が要求）
+      - name: Inject vcpkg builtin-baseline
         shell: pwsh
         run: |
-          cmake --build build --config ${env:BUILD_TYPE}
-
-      - name: Package ZIP
-        if: steps.semver.outputs.valid == 'true'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "${env:ARTIFACT_DIR}" | Out-Null
-          $exePath = Join-Path -Path "build\${env:BUILD_TYPE}" -ChildPath "${env:EXE_NAME}"
-          if (-not (Test-Path $exePath)) {
-            Write-Host "::error::Executable not found: $exePath"
+          if (-not (Test-Path "vcpkg.json")) {
+            Write-Error "vcpkg.json not found."
             exit 1
           }
-          $pkgDir = "package"
-          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
-          Copy-Item "$exePath" "$pkgDir\${env:EXE_NAME}" -Force
-          if (Test-Path "LICENSE") { Copy-Item "LICENSE" "$pkgDir\LICENSE" -Force }
-          if (Test-Path "README.md") { Copy-Item "README.md" "$pkgDir\README.md" -Force }
+          $baseline = (git ls-remote https://github.com/microsoft/vcpkg.git HEAD).Split("`t")[0]
+          if ([string]::IsNullOrWhiteSpace($baseline)) {
+            Write-Error "Failed to get vcpkg baseline commit."
+            exit 1
+          }
+          $json = Get-Content -Raw -Path "vcpkg.json" | ConvertFrom-Json
+          $json | Add-Member -NotePropertyName "builtin-baseline" -NotePropertyValue $baseline -Force
+          $json | ConvertTo-Json -Depth 10 | Out-File -FilePath "vcpkg.json" -Encoding UTF8
+          Write-Host "Injected builtin-baseline: $baseline"
 
-          $zipName = "FoxClip-VALORANT-$(${env:TAG_NAME})-win-x64.zip"
-          if (Test-Path "${env:ARTIFACT_DIR}\$zipName") { Remove-Item "${env:ARTIFACT_DIR}\$zipName" -Force }
-          Compress-Archive -Path "$pkgDir\*" -DestinationPath "${env:ARTIFACT_DIR}\$zipName"
-          # 直接 exe も添付したい場合はコピー
-          Copy-Item "$pkgDir\${env:EXE_NAME}" "${env:ARTIFACT_DIR}\${env:EXE_NAME}" -Force
+      # vcpkg: Manifest を自動検出し、x-gha キャッシュを使ってインストール
+      - name: Setup vcpkg (with cache)
+        id: runvcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: vcpkg.json
+          # doNotUpdateVcpkg: true
 
-      - name: Ensure artifacts exist
-        if: steps.semver.outputs.valid == 'true'
-        id: check_artifacts
+      # vcpkg ルートを特定して CMake に toolchain を渡す
+      - name: Configure (CMake)
         shell: pwsh
         run: |
-          $files = Get-ChildItem -Recurse "${env:ARTIFACT_DIR}" -Include *.zip,*.exe,*.7z -ErrorAction SilentlyContinue
-          if (-not $files) {
-            Write-Host "::error::No release artifacts found under ${env:ARTIFACT_DIR}. Package your outputs (zip/exe/7z) there."
+          $tcRoot = "${{ steps.runvcpkg.outputs.vcpkgRootPath }}"
+          if ([string]::IsNullOrWhiteSpace($tcRoot)) { $tcRoot = $Env:VCPKG_ROOT }
+          if ([string]::IsNullOrWhiteSpace($tcRoot)) { $tcRoot = $Env:VCPKG_INSTALLATION_ROOT }
+          if ([string]::IsNullOrWhiteSpace($tcRoot)) {
+            Write-Error "vcpkg root not found (run-vcpkg outputs / VCPKG_ROOT / VCPKG_INSTALLATION_ROOT)."
+            exit 1
+          }
+          $toolchain = Join-Path $tcRoot 'scripts\buildsystems\vcpkg.cmake'
+          if (-not (Test-Path $toolchain)) {
+            Write-Error "Toolchain not found: $toolchain"
+            exit 1
+          }
+          cmake -S . -B build `
+            -G "${{ env.GENERATOR }}" -A ${{ env.ARCH }} `
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
+            -DCMAKE_TOOLCHAIN_FILE="$toolchain" `
+            -DVCPKG_BUILD_TYPE=${{ env.VCPKG_BUILD_TYPE }} `
+            -DVCPKG_TARGET_TRIPLET=${{ env.VCPKG_DEFAULT_TRIPLET }} `
+            -DOPENSSL_USE_STATIC_LIBS=TRUE
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+      # 依存DLLが残っていないかを検証（dumpbin を堅牢に探索。無ければ警告でスキップ）
+      - name: Verify no OpenSSL DLL dependency (robust)
+        shell: pwsh
+        run: |
+          $exe = Join-Path 'build' '${{ env.BUILD_TYPE }}' 'foxclip_valorant.exe'
+          if (-not (Test-Path $exe)) { Write-Error "EXE not found: $exe"; exit 1 }
+
+          # 1) PATH から探す
+          $dumpbin = (Get-Command dumpbin.exe -ErrorAction SilentlyContinue).Source
+          # 2) vswhere で探す
+          if (-not $dumpbin) {
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (Test-Path $vswhere) {
+              $vsinst = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+              if ($vsinst) {
+                $msvcRoot = Join-Path $vsinst 'VC\Tools\MSVC'
+                if (Test-Path $msvcRoot) {
+                  $cand = Get-ChildItem -Path $msvcRoot -Directory -ErrorAction SilentlyContinue |
+                          Sort-Object Name -Descending |
+                          ForEach-Object {
+                            $p = Join-Path $_.FullName 'bin\Hostx64\x64\dumpbin.exe'
+                            if (Test-Path $p) { $p }
+                          } | Select-Object -First 1
+                  if ($cand) { $dumpbin = $cand }
+                }
+              }
+            }
+          }
+
+          if (-not $dumpbin) {
+            Write-Warning "dumpbin.exe not found. Skipping dependency check."
+            exit 0
+          }
+
+          Write-Host "Using dumpbin: $dumpbin"
+          $deps = & $dumpbin /dependents $exe 2>$null | Select-String -Pattern 'libssl-.*\.dll|libcrypto-.*\.dll'
+          if ($deps) {
+            Write-Error "EXE still depends on OpenSSL DLLs:`n$($deps | Out-String)"
             exit 1
           } else {
-            $files | ForEach-Object { Write-Host "Will upload: $($_.FullName)" }
+            Write-Host "OK: No OpenSSL runtime DLL dependency."
           }
 
+      # EXEのみを成果物にする
+      - name: Package artifacts (exe only)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $Env:ARTIFACT_DIR | Out-Null
+          $exe = Join-Path 'build' '${{ env.BUILD_TYPE }}' 'foxclip_valorant.exe'
+          Copy-Item $exe $Env:ARTIFACT_DIR\
+
+          # タグ名サニタイズ
+          $safeTag = $Env:TAG_NAME -replace '[\\/:*?"<>|]', '-'
+          if ([string]::IsNullOrWhiteSpace($safeTag)) { $safeTag = "untagged" }
+          "SAFE_TAG=$safeTag" >> $Env:GITHUB_ENV
+
+          # ZIP も EXE 単体のみ
+          $zip = Join-Path $Env:ARTIFACT_DIR ("foxclip_valorant-$safeTag.zip")
+          $bin = Join-Path $Env:ARTIFACT_DIR 'foxclip_valorant.exe'
+          Compress-Archive -Path $bin -DestinationPath $zip -Force
+
+      # 失敗時でも必ず Artifacts にアップロード
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: foxclip_valorant-${{ env.SAFE_TAG }}
+          path: |
+            ${{ env.ARTIFACT_DIR }}/*.zip
+            ${{ env.ARTIFACT_DIR }}/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      # タグ（SemVer）のときだけ GitHub Release にも添付
       - name: Create GitHub Release
         if: steps.semver.outputs.valid == 'true'
         uses: softprops/action-gh-release@v2
